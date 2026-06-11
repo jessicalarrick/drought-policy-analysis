@@ -1,0 +1,214 @@
+---
+title: "variable regressions"
+author: "Jessica Larrick"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r 'post'(mandate period) indicator}
+library(dplyr)
+merged_cleanoutliers <- merged_cleanoutliers %>%
+  mutate(
+    PostMandate = ifelse(
+      year_month >= "2015-04" & year_month <= "2017-04",
+      1, 0
+    )
+  )
+```
+
+```{r stage one regression}
+library(fixest)
+
+stage1_model <- feols(
+  pct_reduction ~ PostMandate:i(Stage_Num) + Total.Population.Served |
+    WATER_SYSTEM_ID + year_month,
+  data = merged_cleanoutliers,
+  cluster = ~WATER_SYSTEM_ID
+)
+summary(stage1_model)
+
+```
+
+```{r setting up stage two}
+library(dplyr)
+
+# 1. Add fitted values from Stage 1
+merged_cleanoutliers <- merged_cleanoutliers %>%
+  mutate(fitted = predict(stage1_model, newdata = merged_cleanoutliers))
+
+# 2. Compute supplier-level effectiveness over the emergency window
+eff_2015 <- merged_cleanoutliers %>%
+  filter(PostMandate == 1) %>%   # Apr 2015 – Apr 2017
+  group_by(WATER_SYSTEM_ID) %>%
+  summarise(
+    eff2015 = mean(fitted, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 3. Compute strictness in 2015 (max stage reached in 2015)
+stage2015 <- merged_cleanoutliers %>%
+  filter(Year == 2015) %>%
+  group_by(WATER_SYSTEM_ID) %>%
+  summarise(
+    Stage2015 = max(Stage_Num, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 4. Merge both into the dataset
+merged_cleanoutliers <- merged_cleanoutliers %>%
+  left_join(eff_2015,  by = "WATER_SYSTEM_ID") %>%
+  left_join(stage2015, by = "WATER_SYSTEM_ID")
+```
+
+```{r building a supplier-level dataset for stage two (rather than supplier-year-month)}
+stage2_data <- merged_cleanoutliers %>%
+  group_by(WATER_SYSTEM_ID) %>%
+  summarise(
+    # All tactic variables (Used_*_2020, Used_*_2021, etc.)
+    across(matches("^Used_"), ~ first(.x)),
+
+    # Time-invariant institutional characteristics
+    IsPublic = first(IsPublic),
+    Hydrologic.Region = first(Hydrologic.Region),
+
+    # 2015 drought-year predictors
+    eff2015 = first(eff2015),
+    Stage2015 = first(Stage2015),
+
+    .groups = "drop"
+  )
+
+```
+
+```{r making a stable(invariant and reproducible) measure for population by year}
+# Pop 2020
+pop2020 <- merged_cleanoutliers %>%
+  filter(Year == 2020) %>%
+  arrange(year_month) %>%
+  group_by(WATER_SYSTEM_ID) %>%
+  summarise(Pop2020 = first(Total.Population.Served), .groups = "drop")
+
+# Pop 2021
+pop2021 <- merged_cleanoutliers %>%
+  filter(Year == 2021) %>%
+  arrange(year_month) %>%
+  group_by(WATER_SYSTEM_ID) %>%
+  summarise(Pop2021 = first(Total.Population.Served), .groups = "drop")
+
+# Pop 2022
+pop2022 <- merged_cleanoutliers %>%
+  filter(Year == 2022) %>%
+  arrange(year_month) %>%
+  group_by(WATER_SYSTEM_ID) %>%
+  summarise(Pop2022 = first(Total.Population.Served), .groups = "drop")
+
+# Pop 2023
+pop2023 <- merged_cleanoutliers %>%
+  filter(Year == 2023) %>%
+  arrange(year_month) %>%
+  group_by(WATER_SYSTEM_ID) %>%
+  summarise(Pop2023 = first(Total.Population.Served), .groups = "drop")
+
+#merge all population years into Stage 2
+stage2_data <- stage2_data %>%
+  left_join(pop2020, by = "WATER_SYSTEM_ID") %>%
+  left_join(pop2021, by = "WATER_SYSTEM_ID") %>%
+  left_join(pop2022, by = "WATER_SYSTEM_ID") %>%
+  left_join(pop2023, by = "WATER_SYSTEM_ID")
+```
+
+```{r stage two regression, code to run all years at once for a given tactic}
+years <- 2020:2023
+models <- list()
+
+for (y in years) {
+  
+  #use correct population variable name
+  pop_var <- paste0("Pop", y)
+  
+  #build the formula dynamically
+  formula <- as.formula(
+    paste0(
+      "Used_Rebate_", y,
+      " ~ eff2015 * Stage2015 + ",
+      pop_var,
+      " + IsPublic + Hydrologic.Region"
+    )
+  )
+  
+  #run the model
+  models[[as.character(y)]] <- feols(
+    formula,
+    data = stage2_data,
+    cluster = ~ WATER_SYSTEM_ID
+  )
+}
+
+#results
+lapply(models, summary)
+
+library(modelsummary)
+
+tab <- modelsummary(
+  models,
+  output = "data.frame",
+  estimate  = "{estimate}",
+  statistic = "({std.error})",
+  stars = c("*" = .1, "**" = .05, "***" = .01),
+  gof_omit = "IC|Log|Adj|Pseudo"
+)
+
+```
+
+```{r code for output tables}
+library(modelsummary)
+library(flextable)
+library(tibble)
+
+#specify which coefficients to include and labels
+coef_map <- c(
+  "eff2015" = "Effective 2015",
+  "Stage2015" = "Stage 2015",
+  "eff2015:Stage2015" = "Effective × Stage",
+  "IsPublic" = "Public Utility"
+)
+
+#goodness-of-fit rows and labels
+gof_map <- tribble(
+  ~raw,          ~clean,          ~fmt,
+  "nobs",        "Observations",   0,
+  "r.squared",   "R-squared",      3,
+  "rmse",        "RMSE",           3
+)
+
+#build table
+ft <- modelsummary(
+  models,
+  output = "flextable",
+  coef_map = coef_map,
+  gof_map = gof_map,
+  estimate  = "{estimate}{stars}",
+  statistic = "({std.error})",
+  stars = c("*" = .1, "**" = .05, "***" = .01)
+)
+
+#format table
+ft <- ft |>
+  theme_booktabs() |>
+  autofit() |>
+  bold(part = "header") |>
+  align(align = "center", part = "header") |>
+  add_footer_lines(values = c(
+    "* p < 0.1, ** p < 0.05, *** p < 0.01"
+  ))
+
+#export
+save_as_docx(ft, path = "RebateResults.docx")
+
+```
+
+
