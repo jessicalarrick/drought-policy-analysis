@@ -1,0 +1,120 @@
+---
+title: "graphs"
+author: "Jessica Larrick"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r tactic and stage graphs, making long data frame}
+library(tidyverse)
+
+tacticsgraph_2023 <- merged_cleanoutliers %>%
+  filter(Year == 2023) %>%      # keep only 2023 rows so Stage_Num is from 2023
+  select(
+    WATER_SYSTEM_ID,            # your supplier ID
+    Stage_Num, # stage for 2023 (since you filtered Year == 2023)
+    Stage2015,
+    matches("Used_.*_2023$")    # all tactic columns ending in _2023
+  )
+
+tacticsgraph_long_2023 <- tacticsgraph_2023 %>%
+  pivot_longer(
+    cols = matches("Used_.*_2023$"),
+    names_to = "tactic",
+    values_to = "months_used"
+  ) %>%
+  mutate(tactic = str_remove(tactic, "_2023$"))
+
+
+```
+
+```{r plotting regression results by tactics(use directly after running reg)}
+library(broom)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+
+# 1. Extract coefficients from all models into one dataframe
+coef_df <- map_df(names(models), function(y) {
+  tidy(models[[y]]) %>%
+    mutate(year = as.numeric(y))
+})
+
+# 2. Keep only the three coefficients I want to plot
+plot_df <- coef_df %>%
+  filter(term %in% c("eff2015", "Stage2015", "eff2015:Stage2015"))
+
+# 3. Make the coefficient path plot
+ggplot(plot_df, aes(x = year, y = estimate, color = term)) +
+  geom_line(size = 0.8) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = estimate - 1.96 * std.error,
+                    ymax = estimate + 1.96 * std.error),
+                width = 0.1) +
+  scale_color_manual(
+    values = c(
+      "eff2015" = "slategrey",
+      "Stage2015" = "black",
+      "eff2015:Stage2015" = "blue"
+    ),
+    labels = c(
+      "eff2015" = "Effective 2015",
+      "Stage2015" = "Stage 2015",
+      "eff2015:Stage2015" = "Effective × Stage"
+    )
+  ) +
+    
+  labs(
+    x = "Year",
+    y = "Coefficient Estimate",
+    color = "Term",
+    title = "Rebate Use Coefficient Paths"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+  
+ggsave("Rebate_Coefficient_Paths.pdf", width = 7, height = 5)
+
+
+```
+
+```{r case study supplier-specific tactic use tables}
+library(dplyr)
+library(tidyr)
+
+sweetwater <- "CA3710025"
+
+summary_table <- stage2_data %>%
+  filter(WATER_SYSTEM_ID == sweetwater) %>%
+  select(starts_with("Used_")) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("tactic", "year"),
+    names_pattern = "Used_(.*)_(.*)",
+    values_to = "count"
+  ) %>%
+  pivot_wider(
+    names_from = year,
+    values_from = count
+  ) %>%
+  arrange(tactic)
+library(flextable)
+library(officer)
+
+ft <- flextable(summary_table)
+
+# Create a Word document, add the table, save
+doc <- read_docx() %>%
+  body_add_flextable(ft)
+
+print(doc, target = "sweetwater.docx")
+
+```
+
