@@ -1,0 +1,116 @@
+---
+title: "Cleaning and Preparing"
+author: "Jessica Larrick"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r cleaning 2014 on dataset to normalize the formatting of the contingency plan stages entries}
+library(dplyr)
+library(stringr)
+
+merged_data <- merged_data %>%
+  mutate(
+    lower_stage = tolower(Water.Shortage.Contingency.Stage.Invoked),
+    Stage_Num = case_when(
+      str_detect(lower_stage, "\\b0\\b|zero|stage 0|phase 0|none|no longer|no stage|rescinded|\\bnormal\\b|not yet|\\bna\\b|n/a") ~ 0,
+      str_detect(lower_stage, "\\b1\\b|\\bone\\b|\\ba\\b|first|1st level|\\b1st\\b|stage 1 of the wscp|phase 1|\\bi\\b") ~ 1,
+      str_detect(lower_stage, "\\b2\\b|\\btwo\\b|\\bb\\b|\\bsecond\\b|\\b2nd\\b|moderate|\\b2a\\b|stage 2|phase 2|\\bii\\b") ~ 2,
+      str_detect(lower_stage, "\\b3\\b|\\bthree\\b|\\bc\\b|3c:|stage 3|phase 3|\\b3rd\\b|3rd level|high|voluntary 24%|20%|3rd stage|\\biii\\b|third") ~ 3,
+      str_detect(lower_stage, "\\b4\\b|\\bfour\\b|\\bd\\b|fourth|4b:|4c:|severely|stage 4|phase 4|\\biv\\b") ~ 4,
+      str_detect(lower_stage, "\\b5\\b|\\bfive\\b|\\be\\b|stage 5|phase 5|stage 7|extraordinary|emergency water|emergency conservation|\\bv\\b") ~ 5,
+      TRUE ~ NA_real_
+    )
+  )
+
+```
+
+```{r cutting out missing observations for drought contingency stages}
+# percentage of rows where water contingency stage is NA
+mean(is.na(merged_data$Water.Shortage.Contingency.Stage.Invoked)) * 100
+#returns 3.9192
+#dropping these observations 
+library(dplyr)
+merged_data <- merged_data %>%
+  filter(!is.na(Water.Shortage.Contingency.Stage.Invoked))
+#after running contingency stage conversions to uniform numbers, I check the percent of the Stage_Num column is N/A
+mean(is.na(merged_data$Stage_Num)) * 100
+#returns 5.2425, I drop these as it is a small percentage and the labels are ambiguous such as "standard" 
+merged_data <- merged_data %>%
+  filter(!is.na(Stage_Num))
+```
+
+```{r deleting empty, repeated, or useless columns}
+library(dplyr)
+merged_data <- merged_data %>% select(-Reporting.Month, -NON_POTABLE_DEMAND_PRELIM_EST, -REPORTED.PRELIMINARY.Total.Potable.Water.Production, -REPORTED.PRELIMINARY.Commercial..Industrial..and.Institutional.Water, -REPORTED.PRELIMINARY.Commercial.Agricultural.Water, -DWR.State.Standard.Level.corresponding.to.Stage, -DWR_STANDARD_LEVEL, -DWR_STANDARD_LEVEL_FLAG, -SUPPLIER_NAME, -COUNTY, -Reporting.Month, -REPORT_PERIOD_START_DATE, -REPORT_PERIOD_END_DATE, -HYDRO_REGION, -CLIMATE_ZONE, -POP_REPORT_PERIOD, -CALCULATED.Commercial.Agricultural.Water.Gallons, -CALCULATED.Commercial.Agricultural.Water.Gallons.2013, -REPORTED.FINAL.Commercial.Agricultural.Water, -REPORTED.FINAL.Commercial..Industrial..and.Institutional.Water, -Qualification, -REPORTED.Non.Revenue.Water, -PRELIMINARY.Percent.Residential.Use, -POTABLE_SUPPLY_MINUS_SOLD_FLAG, -POTABLE_SUPPLY_MINUS_SOLD_MINUS_AG_ZSCORE, -POTABLE_SUPPLY_MINUS_SOLD_MINUS_AG_GAL, -POTABLE_DEMAND_PRELIM_EST, -POTABLE_DEMAND_RES_PRELIM_EST, -POTABLE_SUPPLY_MINUS_SOLD_FLAG, -POTABLE_SUPPLY_PRELIM_EST, -POTABLE_DEMAND_AG_GAL, -POTABLE_DEMAND_O_GAL, -POTABLE_DEMAND_IRR_GAL, -POTABLE_DEMAND_CII_GAL, -POTABLE_DEMAND_CII_IRR_GAL, -POTABLE_SUPPLY_MINUS_SOLD_MINUS_AG_GAL_FLAG, lower_stage, -CALCULATED.Total.Potable.Water.Production.Gallons..Ag.Excluded., -CALCULATED.Total.Potable.Water.Production.Gallons.2013..Ag.Excluded., -RES_FLAG)
+
+```
+
+```{r these columns would have been relevant, but had >77% missing observations}
+library(dplyr)
+merged_data <- merged_data %>% select(-County.Under.Drought.Declaration, -POTABLE_SUPPLY_GAL, -POTABLE_VOL_SOLD_GAL, -County.Under.Drought.Declaration)
+```
+
+```{r creating indicator for public suppliers}
+#indicator for private vs public supplier
+# Define keywords for public and private suppliers
+public_keywords <- c("District", "City", "County", "Public", "Municipal", "Town", "Department", "Authority", "Cloverdale")
+private_keywords <- c("Company", "Corporation", "Mutual", "LLC", "Inc", "Association", "Agency", "Systems", "Service")
+
+# Create indicator variable
+merged_data$IsPublic <- ifelse(
+  grepl(paste(public_keywords, collapse = "|"), merged_data$Supplier.Name, ignore.case = TRUE), 1,
+  ifelse(grepl(paste(private_keywords, collapse = "|"), merged_data$Supplier.Name, ignore.case = TRUE), 0, NA)
+)
+
+```
+
+```{r creating my tactic variables from the 2020-2023 data}
+# Define keywords for each category
+communication_keywords <- c("E-mails", "Paper mail", "Notifications via Customer App", "Facebook", "Television")
+waste_keywords <- c("Fine", "tier")
+demand_keywords <- c("Rebate", "Raising Rate", "Surcharge", "Water Audit")
+library(dplyr)
+library(stringr)
+
+# Communication tactics
+for (tactic in communication_keywords) {
+  col_name <- paste0("Used_", str_replace_all(tactic, " ", "_"))
+  response_actions_filtered <- response_actions_filtered %>%
+    mutate(!!col_name := str_detect(`Communication Actions`, regex(tactic, ignore_case = TRUE)))
+}
+
+# Waste actions
+for (tactic in waste_keywords) {
+  col_name <- paste0("Used_", str_replace_all(tactic, " ", "_"))
+  response_actions_filtered <- response_actions_filtered %>%
+    mutate(!!col_name := str_detect(`Waste Actions`, regex(tactic, ignore_case = TRUE)))
+}
+
+# Demand actions
+for (tactic in demand_keywords) {
+  col_name <- paste0("Used_", str_replace_all(tactic, " ", "_"))
+  response_actions_filtered <- response_actions_filtered %>%
+    mutate(!!col_name := str_detect(`Demand Actions`, regex(tactic, ignore_case = TRUE)))
+}
+
+#not a tactic but something I was curious about - % of complaints investigated as vigilance proxy
+response_actions_filtered <- response_actions_filtered %>%
+  mutate(
+    Vigilance = `Number of water waste complaints investigated` / `Number of Water Waste incidents identified or reported`,
+    Vigilance = ifelse(is.na(Vigilance) | is.infinite(Vigilance), NA, Vigilance)
+  )
+
+
+```
+
+```{r extreme outliers}
+#dropping 26 rows(32,917 left) that reported less than 10 residential gallons per day and 34 rows that reported greater than 500 gallons per day, these are extreme outliers(one is as high as 5,000). A normal range is 30-200
+merged_cleanoutliers <- merged_final_clean %>%
+  filter(R.GPCD >= 10, R.GPCD <= 500)
+
+```
