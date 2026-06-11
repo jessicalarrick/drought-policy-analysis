@@ -1,0 +1,56 @@
+---
+title: "Merging data"
+author: "Jessica Larrick"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r duplicates}
+response_actions_filtered_clean <- response_actions_filtered %>%
+  group_by(`Public Water System ID`, `Reporting Month`) %>%
+  summarise(
+    across(starts_with("Used_"), ~ any(. == TRUE, na.rm = TRUE)),  # TRUE if used at least once
+    Vigilance = mean(Vigilance, na.rm = TRUE),                     # average of non-NA values(however vigilance measure is not used in paper)
+    .groups = "drop"
+  )
+
+```
+
+```{r structuring the 2020-2023 data to merge, creating tactic 'retention intensity'}
+#plan: for each supplier/year, create a variable that counts how many months they used that tactic in 2020-2023, and then attach that count to every row in the main dataset
+library(dplyr)
+library(tidyr)
+
+# Step 1: Extract year from Reporting Month
+response_actions_filtered_clean <- response_actions_filtered_clean %>%
+  mutate(Year = format(as.Date(`Reporting Month`), "%Y"))
+
+# Step 2: Count how many months each supplier used each tactic in each year
+tactic_counts_by_year <- response_actions_filtered_clean %>%
+  filter(Year %in% c("2020", "2021", "2022", "2023")) %>%
+  group_by(`Public Water System ID`, Year) %>%
+  summarise(
+    across(starts_with("Used_"), ~ sum(. == TRUE, na.rm = TRUE)),
+    Vigilance_Avg = mean(Vigilance, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Step 3: Pivot wider to get one row per supplier with year-specific columns
+tactic_counts_wide <- tactic_counts_by_year %>%
+  pivot_wider(
+    names_from = Year,
+    values_from = c(Vigilance_Avg, starts_with("Used_")),
+    names_glue = "{.value}_{Year}"
+  )
+
+```
+
+```{r merge by supplier ID tactic_counts_wide with my main df "merged_data"}
+merged_final <- merged_data %>%
+  left_join(tactic_counts_wide, by = c("WATER_SYSTEM_ID" = "Public Water System ID"))
+
+```
