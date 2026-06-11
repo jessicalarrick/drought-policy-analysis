@@ -1,0 +1,126 @@
+---
+title: "Summary Statistics"
+author: "Jessica Larrick"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r summary stats by year, continegency plan stage counts }
+library(dplyr)
+library(flextable)
+library(officer)
+library(magrittr)
+
+df <- merged_cleanoutliers
+
+# Extract year and filter for 2014–2023
+df <- df %>%
+  mutate(Year = substr(as.character(year_month), 1, 4)) %>%
+  filter(Year %in% as.character(2014:2023))
+
+# Filter complete cases
+clean_df <- df %>%
+  filter(complete.cases(R.GPCD, Stage_Num))
+
+# Compute summary statistics by year
+summary_by_year <- clean_df %>%
+  group_by(Year) %>%
+  summarise(
+    Observations = n(),
+    Mean_Stage = mean(Stage_Num, na.rm = TRUE),
+    Median_GPCD = median(R.GPCD, na.rm = TRUE),
+    Stage_4_Count = sum(Stage_Num == 4, na.rm = TRUE),
+     Stage_3_Count = sum(Stage_Num == 3, na.rm = TRUE),
+     Stage_2_Count = sum(Stage_Num == 2, na.rm = TRUE),
+    Stage_1_Count = sum(Stage_Num == 1, na.rm = TRUE),
+    Stage_0_Count = sum(Stage_Num == 0, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+# Rename columns for display
+colnames(summary_by_year) <- c(
+  "Year", "N",
+  "Mean CS",
+  "Median GPCD", "CS 4", "CS 3", "CS 2","CS 1", "CS 0"
+)
+
+# Create flextable, save
+ft <- flextable(summary_by_year) %>%
+  theme_booktabs() %>%
+  autofit() %>%
+  bold(part = "header") %>%
+  align(align = "center", part = "header") %>%
+  align(j = 1, align = "left", part = "body")
+
+save_as_docx(ft, path = "summary_stats_14-23.docx")
+
+```
+
+```{r summary stats by tactic use 2020-2023}
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# --- Start from supplier-level Stage 2 data ---
+df <- stage2_data   # one row per supplier
+
+# --- Identify tactic-year columns ---
+tactic_cols <- names(df)[
+  str_detect(names(df), "^Used_") &
+  str_detect(names(df), "2020|2021|2022|2023")
+]
+
+# --- Reshape and summarize ---
+summary_tactics <- df %>%
+  select(WATER_SYSTEM_ID, all_of(tactic_cols)) %>%
+  pivot_longer(
+    cols = -WATER_SYSTEM_ID,
+    names_to = "var",
+    values_to = "months_used"
+  ) %>%
+  mutate(
+    Year   = str_extract(var, "2020|2021|2022|2023"),
+    Tactic = str_remove(var, "_?(2020|2021|2022|2023)$"),
+    Used   = as.integer(months_used > 0)
+  ) %>%
+  group_by(Tactic, Year) %>%
+  summarise(
+    Suppliers_Using = sum(Used, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = Year,
+    values_from = Suppliers_Using
+  ) %>%
+  mutate(
+    Tactic = str_replace_all(Tactic, c("^Used_" = "", "_" = " "))
+  ) %>%
+  arrange(Tactic)
+
+# --- View result ---
+summary_tactics
+
+library(flextable)
+library(officer)
+
+ft <- flextable(summary_tactics) %>%
+  theme_booktabs() %>%
+  autofit() %>%
+  bold(part = "header") %>%
+  align(align = "center", part = "header") %>%
+  align(j = 1, align = "left", part = "body")
+
+save_as_docx(
+  ft,
+  path = "summary_tactics_by_year_supplier_counts.docx"
+)
+
+
+
+```
+
